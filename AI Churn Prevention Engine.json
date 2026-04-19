@@ -1,0 +1,658 @@
+{
+  "name": "AI Churn Prevention Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1744,
+        0
+      ],
+      "id": "e8e82e69-94aa-436f-a532-90796f0cc346",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"temperature\": 0.2,\n  \"max_tokens\": 700,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a customer success expert specialising in churn prediction. Analyse the customer data and predict their churn risk. Be specific about WHY they are at risk based on their actual numbers. Return ONLY valid JSON, no text outside it:\\n{\\n  \\\"risk_level\\\": \\\"HIGH or MEDIUM or LOW\\\",\\n  \\\"churn_probability\\\": \\\"percentage as number 0-100\\\",\\n  \\\"top_risk_factors\\\": \\\"2-3 specific reasons based on their data\\\",\\n  \\\"recommended_action\\\": \\\"specific action the CS team should take\\\",\\n  \\\"win_back_email_subject\\\": \\\"personalised email subject line\\\",\\n  \\\"win_back_email_body\\\": \\\"personalised re-engagement email under 120 words, warm and helpful tone, reference their specific usage pattern, signed from Customer Success Team\\\"\\n}\\n\\nRisk scoring guide:\\nHIGH: logins < 5 last 30 days, or support tickets > 3, or payment failed, or last login > 30 days ago\\nMEDIUM: logins 5-15, or 1-3 tickets, or usage declining\\nLOW: active, engaged, healthy payments\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Analyse churn risk for this customer:\\nName: {{$json.CustomerName}}\\nPlan: {{$json.Plan}}\\nMRR: ${{$json.MRR}}\\nSignup Date: {{$json.SignupDate}}\\nLast Login: {{$json.LastLoginDate}}\\nLogins last 30 days: {{$json.LoginCount30Days}}\\nSupport tickets (last 90 days): {{$json.SupportTickets}}\\nFeature usage level: {{$json.FeatureUsage}}\\nFailed payment: {{$json.PaymentFailed}}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -1264,
+        -224
+      ],
+      "id": "880ef5f6-f4d1-4540-bfa6-16f890370d5d",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0DcW89UBjD4xU1q2",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiResponse = $input.first().json;\nconst rawText = aiResponse.choices[0].message.content;\n\nlet parsed;\ntry {\n  parsed = JSON.parse(rawText);\n} catch (e) {\n  const match = rawText.match(/\\{[\\s\\S]*\\}/);\n  if (!match) throw new Error('Groq response has no JSON: ' + rawText);\n  parsed = JSON.parse(match[0]);\n}\n\n// Get original customer data from the Google Sheets node\nconst customer = $('Get row(s) in sheet').first().json;\n\nreturn [{\n  json: {\n    customer_id: customer.CustomerID,\n    customer_name: customer.CustomerName,\n    email: customer.Email,\n    plan: customer.Plan,\n    mrr: customer.MRR,\n    risk_level: parsed.risk_level || 'LOW',\n    churn_probability: parsed.churn_probability || '0',\n    risk_factors: parsed.top_risk_factors || 'None identified',\n    recommended_action: parsed.recommended_action || 'Monitor',\n    email_subject: parsed.win_back_email_subject || 'Checking in on your account',\n    email_body: parsed.win_back_email_body || '',\n    analysed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1088,
+        -16
+      ],
+      "id": "082537be-8c41-41ff-b95f-c52917c079e1",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ee912690-bf98-4a5c-ae98-a8810ee7785e",
+              "leftValue": "={{ $json.risk_level }}",
+              "rightValue": "HIGH",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -928,
+        -224
+      ],
+      "id": "8d1dd7bd-aea4-41ab-a824-1849b642f6aa",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.email_subject }}",
+        "message": "=<div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto'> <p>{{ $json.email_body }}</p> <hr style='border:none;border-top:1px solid #e5e7eb;margin:20px 0'> <p style='font-size:12px;color:#9ca3af'>     You're receiving this because you're a valued {{ $json.plan }} customer.     Reply to this email anytime — we'd love to help. </p> </div>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -640,
+        -240
+      ],
+      "id": "c8b768b1-d6b3-4ec2-bf9a-762b0b176aa1",
+      "name": "Send a message",
+      "webhookId": "f6fcb1af-eda0-4dd1-9de9-ddf0c80b2bb5",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "mGRlfUTH4l1NC5jY",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "cs-churn-alerts",
+          "mode": "name"
+        },
+        "text": "=HIGH CHURN RISK — Immediate Action Required  Customer: {{ $('If').item.json.customer_name }} Plan: {{ $('If').item.json.plan }}   MRR: ${{ $('If').item.json.mrr }} Churn Probability: {{ $('If').item.json.churn_probability }}%  Risk Factors: {{ $('If').item.json.risk_factors }} Recommended Action: {{ $('If').item.json.recommended_action }}  Win-back email has been sent automatically. Please follow up with a personal call within 24 hours.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        -272,
+        -240
+      ],
+      "id": "98e29030-403b-4d30-8dd8-76de4b7260e1",
+      "name": "Send a message1",
+      "webhookId": "d13d037c-974c-4ce4-88ed-2810eeaa107b",
+      "credentials": {
+        "slackApi": {
+          "id": "jBMr2NTt68t5utLO",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "043edaf8-163a-4934-b4c2-1ed73f948c9b",
+              "leftValue": "={{ $json.risk_level }}",
+              "rightValue": "MEDIUM",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -752,
+        0
+      ],
+      "id": "756564ba-a392-40d4-aa0a-25d5aaddbd60",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=How's everything going with {{ $json.plan }}?",
+        "emailType": "text",
+        "message": "=Hi {{ $json.customer_name }},  We noticed you haven't been around as much lately and wanted to check in.  Is there anything we can help you with? Any features you're struggling to find value in?  We'd love to hear your feedback — reply to this email or book a 15-minute call with our team.  We're here to help.  Best, Customer Success Team",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -480,
+        -96
+      ],
+      "id": "b75defce-20f7-4bfc-9484-0b966a1f8536",
+      "name": "Send a message2",
+      "webhookId": "6484a0b0-2607-4a92-acaf-67462b2e0042",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "mGRlfUTH4l1NC5jY",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -256,
+        0
+      ],
+      "id": "ac8fa660-a525-4618-b2b3-723e686d2a10",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1aPvNJW3OJb7SlVlDz6oCgSKhj88yMnArGu06_EizVQI",
+          "mode": "list",
+          "cachedResultName": "Customer Health Tracker",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1aPvNJW3OJb7SlVlDz6oCgSKhj88yMnArGu06_EizVQI/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1aPvNJW3OJb7SlVlDz6oCgSKhj88yMnArGu06_EizVQI/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "CustomerID": "={{ $json.customer_id }}",
+            "ChurnRisk": "={{ $json.risk_level }}",
+            "ChurnReason": "={{ $json.risk_factors }}",
+            "LastActionTaken": "={{ $json.recommended_action }} — {{ $json.analysed_at }}"
+          },
+          "matchingColumns": [
+            "CustomerID"
+          ],
+          "schema": [
+            {
+              "id": "CustomerID",
+              "displayName": "CustomerID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "CustomerName",
+              "displayName": "CustomerName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Plan",
+              "displayName": "Plan",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "MRR",
+              "displayName": "MRR",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SignUpDate",
+              "displayName": "SignUpDate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "LastLoginDate",
+              "displayName": "LastLoginDate",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "LoginCount30Days",
+              "displayName": "LoginCount30Days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SupportTickets",
+              "displayName": "SupportTickets",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "FeatureUsage",
+              "displayName": "FeatureUsage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "PaymentFailed",
+              "displayName": "PaymentFailed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ChurnRisk",
+              "displayName": "ChurnRisk",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ChurnReason",
+              "displayName": "ChurnReason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "LastActionTaken",
+              "displayName": "LastActionTaken",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -64,
+        0
+      ],
+      "id": "c7d86489-1f98-436b-8c05-6e2fd7d163a8",
+      "name": "Update row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "vjI5a3n83bDQYOqe",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "your-management-email@company.com",
+        "subject": "=Weekly Churn Risk Report — {{ $now.format('MMMM D, YYYY') }}",
+        "emailType": "text",
+        "message": "=Weekly Customer Health Summary Generated: {{ $now.toISO() }}  This week's AI churn analysis has completed. Check your Customer Health Tracker Google Sheet for full details on every customer's risk score.  All HIGH risk customers have received win-back emails. All MEDIUM risk customers have received check-in emails. Customer Success team has been alerted via Slack.  Action Required: Follow up personally with all HIGH risk accounts.  — Automated by AI Churn Prevention Engine",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        144,
+        0
+      ],
+      "id": "ce760de5-0555-4b9e-a522-0805c7d94680",
+      "name": "Send a message3",
+      "webhookId": "291d2c9f-d6b2-45f0-963b-c3dfd25f588e",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "mGRlfUTH4l1NC5jY",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1aPvNJW3OJb7SlVlDz6oCgSKhj88yMnArGu06_EizVQI",
+          "mode": "list",
+          "cachedResultName": "Customer Health Tracker",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1aPvNJW3OJb7SlVlDz6oCgSKhj88yMnArGu06_EizVQI/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1aPvNJW3OJb7SlVlDz6oCgSKhj88yMnArGu06_EizVQI/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -1568,
+        -224
+      ],
+      "id": "8e4415f6-e715-43eb-8acb-e825eca2d57b",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "vjI5a3n83bDQYOqe",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1424,
+        0
+      ],
+      "id": "b4182d70-d7b5-48ff-92a3-d5082f7a5a61",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "name": "Replace Me",
+      "typeVersion": 1,
+      "position": [
+        -1248,
+        160
+      ],
+      "id": "e6dbcc5a-0d64-488e-9a97-a0098ebf0c8b"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "Send a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Send a message2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Send a message2": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Update row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update row in sheet": {
+      "main": [
+        [
+          {
+            "node": "Send a message3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Replace Me",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replace Me": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "7624a8ac-0056-492a-b111-df9c6b2a6703",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d361637f1d70339ec01cb1a27fd403eac27fb61b561b025cd2a653356b47936c"
+  },
+  "id": "Eb05KCbiFfFq3aY7n3Qud",
+  "tags": []
+}
